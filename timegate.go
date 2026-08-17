@@ -38,6 +38,7 @@ const (
     RejectTooOld
     RejectInvalidTTL
     RejectOverlap
+    RejectMeaninglessAdjacency
 )
 
 type Result struct {
@@ -63,42 +64,76 @@ type TimeGate struct {
     DeleteTimeout     time.Duration
 }
 
-func NewTimeGate(
-    cli *clientv3.Client,
-    adjacency AdjacencyMode,
+type Option func(*TimeGate)
 
-    // timeouts
-    lockTimeout time.Duration,
-    sessionTimeout time.Duration,
-    leaseGrantTimeout time.Duration,
-    putTimeout time.Duration,
-    getTimeout time.Duration,
-    unlockTimeout time.Duration,
-    deleteTimeout time.Duration,
+func WithLockTimeout(d time.Duration) Option {
+    return func(g *TimeGate) { g.LockTimeout = d }
+}
 
-    // TTLs
-    lockSessionTTL int,
-) *TimeGate {
-    return &TimeGate{
-        cli:              cli,
-        Adjacency:        adjacency,
-        LockTimeout:      lockTimeout,
-        SessionTimeout:   sessionTimeout,
-        LeaseGrantTimeout: leaseGrantTimeout,
-        PutTimeout:       putTimeout,
-        GetTimeout:       getTimeout,
-        UnlockTimeout:    unlockTimeout,
-        DeleteTimeout:    deleteTimeout,
-        LockSessionTTL:   lockSessionTTL,
-    }
+func WithSessionTimeout(d time.Duration) Option {
+    return func(g *TimeGate) { g.SessionTimeout = d }
+}
+
+func WithLeaseGrantTimeout(d time.Duration) Option {
+    return func(g *TimeGate) { g.LeaseGrantTimeout = d }
+}
+
+func WithPutTimeout(d time.Duration) Option {
+    return func(g *TimeGate) { g.PutTimeout = d }
+}
+
+func WithGetTimeout(d time.Duration) Option {
+    return func(g *TimeGate) { g.GetTimeout = d }
+}
+
+func WithUnlockTimeout(d time.Duration) Option {
+    return func(g *TimeGate) { g.UnlockTimeout = d }
+}
+
+func WithDeleteTimeout(d time.Duration) Option {
+    return func(g *TimeGate) { g.DeleteTimeout = d }
+}
+
+func WithLockSessionTTL(ttl int) Option {
+    return func(g *TimeGate) { g.LockSessionTTL = ttl }
+}
+
+func WithAdjacency(mode AdjacencyMode) Option {
+    return func(g *TimeGate) { g.Adjacency = mode }
+}
+
+func NewTimeGate(cli *clientv3.Client, opts ...Option) *TimeGate {
+	timegate := &TimeGate{
+        	cli:              cli,
+        	Adjacency:        AdjacentAllowed,
+        	LockTimeout:      500 * time.Millisecond, // Lock acquisition via etcd concurrency is fast; half a second tolerates minor jitter.
+        	SessionTimeout:   2 * time.Second, // Creating a session involves a lease; 2s avoids false timeouts during etcd leader elections.
+        	LeaseGrantTimeout: 1 * time.Second, // Lease grants are cheap; 1s is enough even under load.
+        	PutTimeout:       500 * time.Millisecond, // Writes are fast; 500ms is safe for moderate cluster load.
+        	GetTimeout:       300 * time.Millisecond, // Reads are extremely fast; 300ms is generous.
+        	UnlockTimeout:    300 * time.Millisecond, // Unlock is just a delete; 300ms is safe.
+        	DeleteTimeout:    300 * time.Millisecond, // Same reasoning as unlock.
+        	LockSessionTTL:   10, // Long enough to survive transient pauses, short enough to avoid stale locks.
+	}
+
+    	for _, opt := range opts {
+		opt(timegate)
+	}
+
+	return timegate
 }
 
 func (g *TimeGate) Check(
     id string,
     timestamp time.Time,
-    window time.Duration,
+    before time.Duration,
+    after time.Duration,
     maxValidity time.Duration,
 ) (*Result, error) {
+
+    if before == 0 && after == 0 && g.Adjacency == AdjacentAllowed {
+	return &Result{Accepted: false, Reason: RejectMeaninglessAdjacency}, nil
+    }
 
     age := time.Since(timestamp)
     if age > maxValidity {
@@ -150,8 +185,8 @@ func (g *TimeGate) Check(
         return nil, err
     }
 
-    newStart := timestamp
-    newEnd := timestamp.Add(window)
+    newStart := timestamp.Add(-before)
+    newEnd := timestamp.Add(after)
 
     for _, kv := range resp.Kvs {
         var existing ProcessingWindow

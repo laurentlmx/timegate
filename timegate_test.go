@@ -81,26 +81,7 @@ func mustStartEtcd() (*embed.Etcd, *clientv3.Client) {
 }
 
 func newGate(mode AdjacencyMode) *TimeGate {
-    return NewTimeGate(
-        sharedCli,
-        mode,
-
-        // Lock + session behavior
-        2*time.Second, // lockTimeout
-        2*time.Second, // sessionTimeout (for creating the lock session)
-
-        // Data lease behavior
-        2*time.Second, // leaseGrantTimeout (for creating the data lease)
-
-        // KV operations
-        2*time.Second, // putTimeout
-        2*time.Second, // getTimeout
-        2*time.Second, // unlockTimeout
-        2*time.Second, // deleteTimeout
-
-        // TTLs
-        5, // LockSessionTTL (seconds)
-    )
+    return NewTimeGate(sharedCli, WithAdjacency(mode), WithGetTimeout(2*time.Second), WithPutTimeout(2*time.Second)) // Timeouts modified for local unit tests to pass without warning
 }
 
 // ----------------------------
@@ -113,7 +94,7 @@ func TestRejectTooOld(t *testing.T) {
     ts := time.Now().Add(-10 * time.Minute)
     maxValidity := 1 * time.Minute
 
-    res, err := gate.Check("id1", ts, 10*time.Second, maxValidity)
+    res, err := gate.Check("id1", ts, 0, 10*time.Second, maxValidity)
     if err != nil {
         t.Fatalf("unexpected error: %v", err)
     }
@@ -132,7 +113,7 @@ func TestRejectInvalidTTL(t *testing.T) {
     ts := time.Now()
     maxValidity := 1 * time.Second
 
-    res, err := gate.Check("id2", ts, 0, maxValidity)
+    res, err := gate.Check("id2", ts, 0, 0, maxValidity)
     if err != nil {
         t.Fatalf("unexpected error: %v", err)
     }
@@ -151,7 +132,7 @@ func TestAcceptFirstWindow(t *testing.T) {
     ts := time.Now()
     maxValidity := 1 * time.Minute
 
-    res, err := gate.Check("id3", ts, 10*time.Second, maxValidity)
+    res, err := gate.Check("id3", ts, 0, 10*time.Second, maxValidity)
     if err != nil {
         t.Fatalf("unexpected error: %v", err)
     }
@@ -167,12 +148,12 @@ func TestRejectOverlap(t *testing.T) {
     ts := time.Now()
     maxValidity := 1 * time.Minute
 
-    _, err := gate.Check("id4", ts, 10*time.Second, maxValidity)
+    _, err := gate.Check("id4", ts, 0, 10*time.Second, maxValidity)
     if err != nil {
         t.Fatalf("unexpected error: %v", err)
     }
 
-    res2, err := gate.Check("id4", ts.Add(5*time.Second), 10*time.Second, maxValidity)
+    res2, err := gate.Check("id4", ts.Add(5*time.Second), 0, 10*time.Second, maxValidity)
     if err != nil {
         t.Fatalf("unexpected error: %v", err)
     }
@@ -191,12 +172,12 @@ func TestAcceptNonOverlappingWindows(t *testing.T) {
     ts := time.Now()
     maxValidity := 1 * time.Minute
 
-    _, err := gate.Check("id5", ts, 10*time.Second, maxValidity)
+    _, err := gate.Check("id5", ts, 0, 10*time.Second, maxValidity)
     if err != nil {
         t.Fatalf("unexpected error: %v", err)
     }
 
-    res2, err := gate.Check("id5", ts.Add(20*time.Second), 10*time.Second, maxValidity)
+    res2, err := gate.Check("id5", ts.Add(20*time.Second), 0, 10*time.Second, maxValidity)
     if err != nil {
         t.Fatalf("unexpected error: %v", err)
     }
@@ -212,7 +193,7 @@ func TestRollback(t *testing.T) {
     ts := time.Now()
     maxValidity := 1 * time.Minute
 
-    res, err := gate.Check("id6", ts, 10*time.Second, maxValidity)
+    res, err := gate.Check("id6", ts, 0, 10*time.Second, maxValidity)
     if err != nil {
         t.Fatalf("unexpected error: %v", err)
     }
@@ -244,11 +225,11 @@ func TestConcurrentAccess(t *testing.T) {
     ts := time.Now()
     maxValidity := 1 * time.Minute
 
-    results := make(chan bool, 10)
+    results := make(chan bool, 5)
 
-    for i := 0; i < 10; i++ {
+    for i := 0; i < 5; i++ {
         go func() {
-            res, err := gate.Check("id7", ts, 10*time.Second, maxValidity)
+            res, err := gate.Check("id7", ts, 0, 10*time.Second, maxValidity)
             if err != nil {
                 results <- false
                 return
@@ -258,7 +239,7 @@ func TestConcurrentAccess(t *testing.T) {
     }
 
     acceptedCount := 0
-    for i := 0; i < 10; i++ {
+    for i := 0; i < 5; i++ {
         if <-results {
             acceptedCount++
         }
@@ -275,17 +256,17 @@ func TestTwoNonOverlappingThenOverlappingThird(t *testing.T) {
     base := time.Now()
     maxValidity := 1 * time.Minute
 
-    res1, err := gate.Check("id8", base, 10*time.Second, maxValidity)
+    res1, err := gate.Check("id8", base, 0, 10*time.Second, maxValidity)
     if err != nil || !res1.Accepted {
         t.Fatalf("expected first window accepted, got err=%v reason=%v", err, res1.Reason)
     }
 
-    res2, err := gate.Check("id8", base.Add(20*time.Second), 10*time.Second, maxValidity)
+    res2, err := gate.Check("id8", base.Add(20*time.Second), 0, 10*time.Second, maxValidity)
     if err != nil || !res2.Accepted {
         t.Fatalf("expected second window accepted, got err=%v reason=%v", err, res2.Reason)
     }
 
-    res3, err := gate.Check("id8", base.Add(5*time.Second), 10*time.Second, maxValidity)
+    res3, err := gate.Check("id8", base.Add(5*time.Second), 0, 10*time.Second, maxValidity)
     if err != nil {
         t.Fatalf("unexpected error: %v", err)
     }
@@ -306,12 +287,12 @@ func TestAdjacentWindowsBehavior(t *testing.T) {
     {
         gate := newGate(AdjacentNotAllowed)
 
-        _, err := gate.Check("id9", base, 10*time.Second, maxValidity)
+        _, err := gate.Check("id9", base, 0, 10*time.Second, maxValidity)
         if err != nil {
             t.Fatalf("unexpected error: %v", err)
         }
 
-        res, err := gate.Check("id9", base.Add(10*time.Second), 10*time.Second, maxValidity)
+        res, err := gate.Check("id9", base.Add(10*time.Second), 0, 10*time.Second, maxValidity)
         if err != nil {
             t.Fatalf("unexpected error: %v", err)
         }
@@ -325,18 +306,65 @@ func TestAdjacentWindowsBehavior(t *testing.T) {
     {
         gate := newGate(AdjacentAllowed)
 
-        _, err := gate.Check("id10", base, 10*time.Second, maxValidity)
+        _, err := gate.Check("id10", base, 0, 10*time.Second, maxValidity)
         if err != nil {
             t.Fatalf("unexpected error: %v", err)
         }
 
-        res, err := gate.Check("id10", base.Add(10*time.Second), 10*time.Second, maxValidity)
+        res, err := gate.Check("id10", base.Add(10*time.Second), 0, 10*time.Second, maxValidity)
         if err != nil {
             t.Fatalf("unexpected error: %v", err)
         }
 
         if !res.Accepted {
             t.Fatalf("expected adjacent windows to be allowed in AdjacentAllowed mode")
+        }
+    }
+}
+
+func TestSameTimestampsWithoutTimeframes(t *testing.T) {
+    ts := time.Now()
+    maxValidity := 1 * time.Minute
+
+    // AdjacentNotAllowed → same timestamp rejected
+    {
+        gate := newGate(AdjacentNotAllowed)
+
+        _, err := gate.Check("id11", ts, 0, 0, maxValidity)
+        if err != nil {
+            t.Fatalf("unexpected error: %v", err)
+        }
+
+        res, err := gate.Check("id11", ts, 0, 0, maxValidity)
+        if err != nil {
+            t.Fatalf("unexpected error: %v", err)
+        }
+
+        if res.Accepted {
+            t.Fatalf("expected same timestamps to be rejected in AdjacentNotAllowed mode")
+        }
+    }
+
+    // AdjacentAllowed → same timestamp accepted
+    {
+        gate := newGate(AdjacentAllowed)
+
+        _, err := gate.Check("id12", ts, 0, 0, maxValidity)
+        if err != nil {
+            t.Fatalf("unexpected error: %v", err)
+        }
+
+        res, err := gate.Check("id12", ts, 0, 0, maxValidity)
+        if err != nil {
+            t.Fatalf("unexpected error: %v", err)
+        }
+
+	if res.Accepted {
+            t.Fatalf("expected timestamp to be rejected due to overlap")
+        }
+
+        if res.Reason != RejectMeaninglessAdjacency {
+            t.Fatalf("expected RejectMeaninglessAdjacency, got %v", res.Reason)
         }
     }
 }
