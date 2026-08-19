@@ -15,7 +15,21 @@ Timegate.Check(id string, // Event ID
 ) (*Result, error)
 ```
 
-This lock can only be obtained if there is no event in the database with the same ID and an incompatible time window; that is, overlapping the requested one.  
+This lock can only be obtained if there is no event in the database with the same ID and an incompatible time window, that is, overlapping the requested one as shown below.
+
+```mermaid
+%%{ init: { 
+  'themeVariables': { 'activeTaskBkgColor': '#2ecc71', 'activeTaskBorderColor': '#27ae60' },
+  'themeCSS': '.tick text { display: none !important; } .grid .tick line { display: none !important; }'
+} }%%
+gantt
+    dateFormat YYYY-MM-DD
+
+    2nd occurrence of ID #1 [Ok] : active, 2026-01-01, 2026-01-02
+    3rd occurrence of ID #1 [Overlap !] : crit, 2026-01-03, 2026-01-05
+    ID #1 [Time lock stored in etcd and active] : 2026-01-04, 2026-01-06
+    4th occurrence of ID #1 [Ok] : active, 2026-01-06, 2026-01-07
+```
 
 Back to the examples :
 
