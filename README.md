@@ -25,9 +25,9 @@ This lock can only be obtained if there is no event in the database with the sam
 gantt
     dateFormat YYYY-MM-DD
 
+    1st occurrence of ID #1 [Time lock stored in etcd and active] : 2026-01-04, 2026-01-06
     2nd occurrence of ID #1 [Ok] : active, 2026-01-01, 2026-01-02
     3rd occurrence of ID #1 [Overlap !] : crit, 2026-01-03, 2026-01-05
-    1st occurrence of ID #1 [Time lock stored in etcd and active] : 2026-01-04, 2026-01-06
     4th occurrence of ID #1 [Ok even if adjacent] : active, 2026-01-06, 2026-01-08
 ```
 
