@@ -368,3 +368,34 @@ func TestSameTimestampsWithoutTimeframes(t *testing.T) {
         }
     }
 }
+
+func TestAcceptSecondAfterMaxValidity(t *testing.T) {
+    gate := newGate(AdjacentNotAllowed)
+
+    base := time.Now()
+    maxValidity := 2 * time.Second
+
+    res1, err := gate.Check("id13", base, 0, 10*time.Second, maxValidity)
+    if err != nil || !res1.Accepted {
+        t.Fatalf("expected first window accepted, got err=%v reason=%v", err, res1.Reason)
+    }
+
+    res2, err := gate.Check("id13", base.Add(5*time.Second), 0, 10*time.Second, maxValidity)
+    if err != nil {
+        t.Fatalf("unexpected error: %v", err)
+    }
+
+    if res2.Accepted {
+        t.Fatalf("expected second window to be rejected due to overlap")
+    }
+    if res2.Reason != RejectOverlap {
+        t.Fatalf("expected RejectOverlap, got %v", res2.Reason)
+    }
+
+    time.Sleep(3 * time.Second)
+
+    res3, err := gate.Check("id13", base, 0, 10*time.Second, 10*time.Second)
+    if err != nil || !res3.Accepted {
+        t.Fatalf("expected third window accepted, got err=%v reason=%v", err, res3.Reason)
+    }
+}
